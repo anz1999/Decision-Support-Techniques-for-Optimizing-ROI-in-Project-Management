@@ -1,0 +1,63 @@
+import numpy as np
+import pandas as pd
+
+# Load decision matrix and criteria weights
+decision_matrix = pd.read_csv("decision_matrix.csv")
+criteria_weights = pd.read_csv("criteria_weights.csv")
+
+# Convert fuzzy number strings to tuples
+def parse_fuzzy_number(fuzzy_str):
+    return tuple(map(float, fuzzy_str.strip("()").split(",")))
+
+for col in decision_matrix.columns[1:]:
+    decision_matrix[col] = decision_matrix[col].apply(parse_fuzzy_number)
+
+# Compute the fuzzy positive and negative ideal solutions
+def fuzzy_topsis(decision_matrix, criteria_weights):
+    num_alternatives = len(decision_matrix)
+    num_criteria = len(criteria_weights)
+
+    # Normalize the decision matrix using linear scale transformation
+    normalized_matrix = decision_matrix.copy()
+    for col in decision_matrix.columns[1:]:
+        col_values = np.array([num for num in decision_matrix[col]])
+        max_values = np.max(col_values, axis=0)
+        min_values = np.min(col_values, axis=0)
+        normalized_matrix[col] = [(val - min_values) / (max_values - min_values) for val in col_values]
+
+    # Apply weights to the normalized matrix
+    weighted_matrix = normalized_matrix.copy()
+    weights = criteria_weights["Defuzzified_Weight"].values
+    for i, col in enumerate(weighted_matrix.columns[1:]):
+        weighted_matrix[col] = weighted_matrix[col].apply(lambda x: tuple(val * weights[i] for val in x))
+
+    # Compute fuzzy positive ideal solution (FPIS) and negative ideal solution (FNIS)
+    fpis = {col: max(weighted_matrix[col], key=lambda x: x[1]) for col in weighted_matrix.columns[1:]}
+    fnis = {col: min(weighted_matrix[col], key=lambda x: x[1]) for col in weighted_matrix.columns[1:]}
+
+    # Compute distances to FPIS and FNIS
+    def distance(a, b):
+        return np.sqrt(sum((a[i] - b[i]) ** 2 for i in range(3)))
+
+    distances_to_fpis = [sum(distance(weighted_matrix.iloc[i][col], fpis[col]) for col in fpis) for i in range(num_alternatives)]
+    distances_to_fnis = [sum(distance(weighted_matrix.iloc[i][col], fnis[col]) for col in fnis) for i in range(num_alternatives)]
+
+    # Compute closeness coefficient
+    closeness_coefficients = [distances_to_fnis[i] / (distances_to_fnis[i] + distances_to_fpis[i]) for i in range(num_alternatives)]
+
+    # Rank alternatives
+    rankings = sorted(range(len(closeness_coefficients)), key=lambda k: closeness_coefficients[k], reverse=True)
+    ranking_results = pd.DataFrame({
+        "Alternative": decision_matrix["Alternative"],
+        "Distance_to_FPIS": distances_to_fpis,
+        "Distance_to_FNIS": distances_to_fnis,
+        "Closeness_Coefficient": closeness_coefficients,
+        "Rank": [rankings.index(i) + 1 for i in range(len(rankings))]
+    })
+
+    return ranking_results
+
+# Run Fuzzy TOPSIS
+ranking_results = fuzzy_topsis(decision_matrix, criteria_weights)
+ranking_results.to_csv("ranking_results.csv", index=False)
+print(ranking_results)
